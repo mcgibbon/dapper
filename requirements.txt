@@ -1,0 +1,5 @@
+six>=1.9.0
+numpy>=1.6
+setuptools>=15.0
+matplotlib>=1.0
+xarray>=0.7
