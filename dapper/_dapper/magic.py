@@ -4,10 +4,10 @@ Created on Thu Mar 24 12:33:45 2016
 
 @author: mcgibbon
 """
-from .time import TimeRange
+from . import export
+from .time import TimeRange, datetime
 import os
 import re
-from datetime import datetime
 import pytz
 
 root_dir = '/home/disk/eos4/mcgibbon/nobackup/MAGIC/all/'
@@ -45,6 +45,11 @@ regex_dataset_dict = {
     'kazr_precipitation': {
         'regex': r'KAZR_precipitation.(\d{4})(\d\d)(\d\d)\.(\d\d)(\d\d)(\d\d).nc',
         'directory': os.path.join(root_dir, 'kazr_precip_5min'),
+        'aliases': {},
+    },
+    'marmet': {
+        'regex': r'magmarmet\.(\d{4})(\d\d)(\d\d)\.(\d\d)(\d\d)(\d\d)\.custom\.cdf',
+        'directory': os.path.join(root_dir, 'marmet'),
         'aliases': {},
     },
 }
@@ -92,3 +97,4 @@ def get_leg_times(filename):
 
 leg_times_filename = os.path.join(root_dir, 'isar', 'MagicLegTimes.txt')
 leg_times = get_leg_times(leg_times_filename)
+export(leg_times, as_name='magic_leg_times')
