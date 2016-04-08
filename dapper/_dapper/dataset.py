@@ -50,10 +50,13 @@ class Dataset(object):
     def __unicode__(self):
         return self._dataset.__unicode__()
 
-    def resample(self, window='3H'):
-        xarray_dataset = self._dataset.resample(window, 'time', how='mean', label='left')
-        time_offset_to_middle = 0.5*(xarray_dataset['time'][1] - xarray_dataset['time'][0])
-        xarray_dataset['time'] += time_offset_to_middle
+    def resample(self, window='3H', label='center'):
+        if label == 'center':
+            xarray_dataset = self._dataset.resample(window, 'time', how='mean', label='left')
+            time_offset_to_middle = 0.5*(xarray_dataset['time'][1] - xarray_dataset['time'][0])
+            xarray_dataset['time'] += time_offset_to_middle
+        else:
+            xarray_dataset = self._dataset.resample(window, 'time', how='mean', label=label)
         return Dataset(xarray_dataset)
 
     def __getitem__(self, key):
@@ -100,6 +103,34 @@ class FilenameDataset(Dataset):
             dataset = xarray.open_mfdataset(filenames)
         super(FilenameDataset, self).__init__(dataset, variable_aliases)
 
+@export
+class SoundingDataset(Dataset):
+
+    def __init__(self, filenames, variable_aliases=None):
+        if isinstance(filenames, string_types):
+            self._sounding_datasets = [xarray.open_dataset(filenames)]
+        else:
+            self._sounding_datasets = []
+            for filename in filenames:
+                self._sounding_datasets.append(xarray.open_dataset(filename))
+        super(SoundingDataset, self).__init__(dataset=None, variable_aliases=variable_aliases)
+        self._construct_dataset()
+
+    def _construct_dataset(self):
+        time_axis = [get_xarray_initial_time(ds) for ds in self._sounding_datasets]
+        z_inv = [heffter_pblht(ds['alt'].values, theta_from_sounding_dataset(ds))
+                 for ds in self._sounding_datasets]
+        # TODO: construct a bare dataset first, then use some of the same functions called
+        # by SamDataset, after generalizing them. Using variable aliases will allow
+        # them to be generalized.
+
+
+def theta_from_sounding_dataset(xarray_dataset):
+    return (xarray_dataset['tdry'] + 273.15) * (xarray_dataset['pres'].values/(1e3))**2/7.
+
+def get_xarray_initial_time(xarray_dataset):
+    return xarray_dataset['time'][0]
+
 
 @export
 class SamDataset(FilenameDataset):
@@ -115,9 +146,8 @@ class SamDataset(FilenameDataset):
         self['stratocumulus_cbh'] = (['time'], _get_sam_stratocumulus_cbh(self), {'units': 'm'})
         self['LCL'] = (['time'], _get_sam_lcl(self), {'units': 'm'})
         self['z_inv'] = (['time'], _get_sam_z_inv(self), {'units': 'm'})
-        delta_q_bl, frac_q_bl = _get_sam_q_bl_products(self)
-        self['delta_q_bl'] = (['time'], delta_q_bl, {'units': 'g/kg'})
-        self['frac_q_bl'] = (['time'], frac_q_bl, {'units': 'g/kg'})
+        self['delta_q_bl'] = (['time'], _get_sam_delta_q_bl(self), {'units': 'g/kg'})
+        self['stratocumulus_LCL'] = (['time'], _get_sam_stratocumulus_lcl(self), {'units': 'm'})
 
     @property
     def time(self):
@@ -142,13 +172,13 @@ def day_in_year_to_datetime(day_in_year, year):
                      for t in day_in_year])
 
 
-def _get_sam_q_bl_products(dataset):
+def _get_sam_delta_q_bl(dataset):
     z_inv = dataset['z_inv'].values
     q = dataset['QT'].values
     z = dataset['z'].values
     q_top = get_values_at_heights(q, height_axis=z, height_values=z_inv - 100.)
     q_near_surface = get_values_at_heights(q, z, np.zeros_like(z_inv) + 100.)
-    return q_near_surface - q_top, q_near_surface/q_top
+    return q_near_surface - q_top
 
 
 def _get_sam_z_inv(dataset):
@@ -253,6 +283,16 @@ def moving_average(a, n=3):
 
 def _get_sam_lcl(dataset):
     return zlcl_from_T_RH(dataset['TABS'].values[:, 0], dataset['RELH'].values[:, 0])
+
+
+def _get_sam_stratocumulus_lcl(dataset):
+    z_inv = dataset['z_inv'].values
+    T = dataset['TABS'].values
+    RH = dataset['RELH'].values
+    z = dataset['z'].values
+    T_top = get_values_at_heights(T, height_axis=z, height_values=z_inv - 100.)
+    RH_top = get_values_at_heights(RH, height_axis=z, height_values=z_inv - 100.)
+    return z_inv + zlcl_from_T_RH(T_top, RH_top)
 
 
 def _get_sam_stratocumulus_cbh(dataset):

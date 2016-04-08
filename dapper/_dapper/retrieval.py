@@ -33,6 +33,8 @@ def get_dataset(data_type, time_range=None, **kwargs):
         return get_mwr_dataset(time_range, **kwargs)
     elif data_type == 'decoupling':
         return get_decoupling_dataset(time_range, **kwargs)
+    else:
+        raise ValueError('Unable to get dataset for data_type "{}"'.format(data_type))
 
 
 @export
@@ -51,6 +53,9 @@ def get_decoupling_dataset(time_range=None, window='3H'):
     first_cbh = ceilometer['first_cbh']
     first_cbh = first_cbh[first_cbh.values < 3000.].resample(
         window, dim='time', how=lambda x, axis=None: np.percentile(x, q=95, axis=axis))
+    cf_dataset = get_dataset('cloud_fraction', time_range=time_range, window=window, label='left')
+    cloud_fraction, first_cbh = xarray.align(cf_dataset['low_cloud_fraction'], first_cbh)
+    first_cbh[cloud_fraction < 0.5] = np.nan
     surface = get_dataset('marmet', time_range=time_range).xarray.resample(
         window, dim='time', how='mean')
     surface, first_cbh = xarray.align(surface, first_cbh, join='outer')
@@ -63,12 +68,12 @@ def get_decoupling_dataset(time_range=None, window='3H'):
     return Dataset(xarray.Dataset(data_vars, coords))
 
 
-def get_cloud_fraction_dataset(time_range=None):
+def get_cloud_fraction_dataset(time_range=None, window='3H', label='center'):
     ceil_dataset = get_dataset('ceilometer', time_range=time_range)
     low_cld_frac, cld_frac = get_cloud_fraction_arrays_from_ceil_dataset(ceil_dataset)
     ceil_dataset['cloud_fraction'] = (('time',), cld_frac)
     ceil_dataset['low_cloud_fraction'] = (('time',), low_cld_frac)
-    return ceil_dataset.resample('3H')
+    return ceil_dataset.resample(window, label=label)
 
 
 def get_cloud_fraction_arrays_from_ceil_dataset(ceil_dataset):
