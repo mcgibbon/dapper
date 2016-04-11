@@ -4,7 +4,7 @@ Created on Thu Mar 24 12:19:59 2016
 
 @author: mcgibbon
 """
-from .dataset import Dataset, FilenameDataset, EmptyDataset
+from .dataset import Dataset, FilenameDataset, EmptyDataset, SoundingDataset
 from . import export
 from . import magic
 from .util import zlcl_from_T_RH
@@ -33,6 +33,8 @@ def get_dataset(data_type, time_range=None, **kwargs):
         return get_mwr_dataset(time_range, **kwargs)
     elif data_type == 'decoupling':
         return get_decoupling_dataset(time_range, **kwargs)
+    elif data_type in ('sounding', 'soundings'):
+        return get_regex_dataset('soundings', time_range, DatasetType=SoundingDataset, **kwargs)
     else:
         raise ValueError('Unable to get dataset for data_type "{}"'.format(data_type))
 
@@ -166,7 +168,7 @@ def get_all_dat_in_directory(directory):
             if (len(name) > 4) and (name[:-4] == '.dat')]
 
 
-def get_regex_dataset(data_type, time_range=None):
+def get_regex_dataset(data_type, time_range=None, DatasetType=FilenameDataset):
     directory = regex_dataset_dict[data_type]['directory']
     regex_string = regex_dataset_dict[data_type]['regex']
     filenames = get_filenames(directory, regex_string, time_range)
@@ -174,7 +176,7 @@ def get_regex_dataset(data_type, time_range=None):
         return EmptyDataset()
     else:
         aliases = regex_dataset_dict[data_type]['aliases']
-        return FilenameDataset(filenames, variable_aliases=aliases)
+        return DatasetType(filenames, variable_aliases=aliases)
 
 
 def get_npz_dataset(filename):

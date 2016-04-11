@@ -13,6 +13,7 @@ from .util import zlcl_from_T_RH
 from .magic import leg_times
 import numpy as np
 import re
+import atmos
 try:
     from numba import jit
 except ImportError:
@@ -32,11 +33,12 @@ class Dataset(object):
         variable_aliases should be a dictionary whose keys are aliases, and values
         are the variable names they refer to.
         """
-        if 'time_offset' in xarray_dataset:
-            xarray_dataset['time'] = xarray_dataset['time_offset']
+#        if 'time_offset' in xarray_dataset:
+#            xarray_dataset['time'] = xarray_dataset['time_offset']
         self._dataset = xarray_dataset
         self._time = get_netcdf_time(self._dataset)
-        self.variable_aliases = {}
+        if not hasattr(self, 'variable_aliases'):  # subclass might initialize this
+            self.variable_aliases = {}
         if variable_aliases is not None:
             for alias, variable_name in variable_aliases.items():
                 self.define_alias(alias, variable_name)
@@ -80,7 +82,6 @@ class Dataset(object):
     def _dataset_has_variable(self, variable_name):
         return variable_name in self._dataset.data_vars.keys()
 
-
     @property
     def time(self):
         return self._time
@@ -103,6 +104,7 @@ class FilenameDataset(Dataset):
             dataset = xarray.open_mfdataset(filenames)
         super(FilenameDataset, self).__init__(dataset, variable_aliases)
 
+
 @export
 class SoundingDataset(Dataset):
 
@@ -113,23 +115,32 @@ class SoundingDataset(Dataset):
             self._sounding_datasets = []
             for filename in filenames:
                 self._sounding_datasets.append(xarray.open_dataset(filename))
-        super(SoundingDataset, self).__init__(dataset=None, variable_aliases=variable_aliases)
-        self._construct_dataset()
+        dataset = construct_sounding_xarray_dataset(self._sounding_datasets)
+        super(SoundingDataset, self).__init__(dataset, variable_aliases=variable_aliases)
+        self._derive_quantities()
 
-    def _construct_dataset(self):
-        time_axis = [get_xarray_initial_time(ds) for ds in self._sounding_datasets]
-        z_inv = [heffter_pblht(ds['alt'].values, theta_from_sounding_dataset(ds))
-                 for ds in self._sounding_datasets]
-        # TODO: construct a bare dataset first, then use some of the same functions called
-        # by SamDataset, after generalizing them. Using variable aliases will allow
-        # them to be generalized.
+    def _derive_quantities(self):
+        self['T'] = (['time', 'iz'], self['tdry'].values + 273.15, {'units': 'degK'})
+        self['LCL'] = (['time'], _get_snd_lcl(self), {'units': 'm'})
+        self['z_inv'] = (['time'], _get_snd_z_inv(self), {'units': 'm'})
+        self['delta_q_bl'] = (['time'], _get_snd_delta_q_bl(self), {'units': 'g/kg'})
+        self['stratocumulus_LCL'] = (['time'], _get_snd_stratocumulus_lcl(self), {'units': 'm'})
+
+def construct_sounding_xarray_dataset(sounding_datasets):
+    time_axis = [get_xarray_initial_time(ds) for ds in sounding_datasets]
+    subset_soundings = [snd.isel(time=slice(0, 1000)) for snd in sounding_datasets]
+    for snd in subset_soundings:
+        snd.rename({'time':'iz'}, inplace=True)  # time axis is really vertical axis
+    dataset = xarray.concat(subset_soundings, 'time')  # new axis for time
+    dataset['time'] = (['time'], time_axis)
+    return dataset
 
 
 def theta_from_sounding_dataset(xarray_dataset):
     return (xarray_dataset['tdry'] + 273.15) * (xarray_dataset['pres'].values/(1e3))**2/7.
 
 def get_xarray_initial_time(xarray_dataset):
-    return xarray_dataset['time'][0]
+    return xarray_dataset['time_offset'].values[0]
 
 
 @export
@@ -172,23 +183,59 @@ def day_in_year_to_datetime(day_in_year, year):
                      for t in day_in_year])
 
 
-def _get_sam_delta_q_bl(dataset):
+def qv_from_p_T_RH(p, T, RH):
+    es = 611.2*np.exp(17.67*(T-273.15)/(T-29.65))
+    qvs = 0.622*es/(p-0.378*es)
+    rvs = qvs/(1-qvs)
+    rv = RH/100. * rvs
+    qv = rv/(1+rv)
+    return qv
+
+
+def _get_snd_delta_q_bl(dataset):
     z_inv = dataset['z_inv'].values
-    q = dataset['QT'].values
-    z = dataset['z'].values
+    q = qv_from_p_T_RH(dataset['pres'].values*100., dataset['tdry'].values + 273.15,
+                       dataset['rh'].values)
+    q = q*1e3  # want in g/kg
+    z = dataset['alt'].values.astype(np.float64)  # stored as float32
     q_top = get_values_at_heights(q, height_axis=z, height_values=z_inv - 100.)
     q_near_surface = get_values_at_heights(q, z, np.zeros_like(z_inv) + 100.)
     return q_near_surface - q_top
+
+
+def _get_sam_delta_q_bl(dataset):
+    z_inv = dataset['z_inv'].values
+    q = dataset['QV'].values
+    q_top = get_values_at_heights(q, height_axis=z, height_values=z_inv - 100.)
+    q_near_surface = get_values_at_heights(q, z, np.zeros_like(z_inv) + 100.)
+    return q_near_surface - q_top
+
+
+def _get_snd_z_inv(dataset):
+    return heffter_pblht(dataset['alt'].values, theta_from_sounding_dataset(dataset.xarray).values)
 
 
 def _get_sam_z_inv(dataset):
     return heffter_pblht(dataset['z'].values, dataset['THETA'].values)
 
 
-@jit(nopython=True)
 def get_values_at_heights(array, height_axis, height_values):
     if len(height_values) != array.shape[0]:
         raise ValueError('must have one height for each point in time')
+    elif (len(height_axis.shape) == 2) and (height_axis.shape[0] == len(height_values)):
+        out_values = []
+        for i in range(height_axis.shape[0]):
+            value_array = _get_values_at_heights(array[i:i+1, :], height_axis[i, :],
+                                                 height_values[i:i+1])
+            out_values.append(value_array[0])
+        return np.asarray(out_values)
+    elif len(height_axis.shape) > 1:
+        raise ValueError('height_axis must be 1D or have one axis for each of height_values')
+    else:
+        return _get_values_at_heights(array, height_axis, height_values)
+
+@jit(nopython=True)
+def _get_values_at_heights(array, height_axis, height_values):
     output_array = np.zeros((array.shape[0],), dtype=array.dtype)
     for i in range(len(height_values)):
         current_height = height_values[i]
@@ -271,8 +318,7 @@ def heffter_pblht_1D(z, theta):
                 pass
     # we didn't find a boundary layer height
     # return height of highest dtheta_dz below 4000m
-    return z[z < 4000][dtheta_dz[(z < 4000)[:-1]] ==
-                       dtheta_dz[(z < 4000)[:-1]].max()][0]
+    return z[:-1][z[:-1] < 4000][np.argmax(dtheta_dz[z[:-1] < 4000])]
 
 
 def moving_average(a, n=3):
@@ -281,8 +327,22 @@ def moving_average(a, n=3):
     return ret[n - 1:] / n
 
 
+def _get_snd_lcl(dataset):
+    return zlcl_from_T_RH(dataset['tdry'].values[:, 0] + 273.15, dataset['rh'].values[:, 0])
+
+
 def _get_sam_lcl(dataset):
     return zlcl_from_T_RH(dataset['TABS'].values[:, 0], dataset['RELH'].values[:, 0])
+
+
+def _get_snd_stratocumulus_lcl(dataset):
+    z_inv = dataset['z_inv'].values
+    T = dataset['T'].values
+    RH = dataset['rh'].values
+    z = dataset['alt'].values
+    T_top = get_values_at_heights(T, height_axis=z, height_values=z_inv - 100.)
+    RH_top = get_values_at_heights(RH, height_axis=z, height_values=z_inv - 100.)
+    return z_inv + zlcl_from_T_RH(T_top, RH_top)
 
 
 def _get_sam_stratocumulus_lcl(dataset):
