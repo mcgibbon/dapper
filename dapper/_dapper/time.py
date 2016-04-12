@@ -82,6 +82,15 @@ class TimeRange(object):
         self.start = cast_to_dapper_datetime(start_time)
         self.end = cast_to_dapper_datetime(end_time)
 
+    def __unicode__(self):
+        return unicode(self.start) + u' to ' + unicode(self.end)
+
+    def __str__(self):
+        return str(unicode(self))
+
+    def __repr__(self):
+        return 'TimeRange({}, {})'.format(repr(self.start), repr(self.end))
+
     def __iter__(self):
         for item in (self.start, self.end):
             yield item

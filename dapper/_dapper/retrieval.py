@@ -316,26 +316,6 @@ def get_xarray_initial_time(xarray_dataset):
 
 
 @export
-class SamDataset(FilenameDataset):
-
-    def __init__(self, filename, variable_aliases=None):
-        if not isinstance(filename, string_types):
-            raise NotImplementedError('SamDataset does not work as multi-file dataset')
-        super(SamDataset, self).__init__(filename, variable_aliases)
-        self._year = get_sam_year_from_filename(filename)
-        self._derive_quantities()
-
-    def _derive_quantities(self):
-        self['stratocumulus_cbh'] = (['time'], _get_sam_stratocumulus_cbh(self), {'units': 'm'})
-        self['LCL'] = (['time'], _get_sam_lcl(self), {'units': 'm'})
-        self['z_inv'] = (['time'], _get_sam_z_inv(self), {'units': 'm'})
-        self['delta_q_bl'] = (['time'], _get_sam_delta_q_bl(self), {'units': 'g/kg'})
-        self['stratocumulus_LCL'] = (['time'], _get_sam_stratocumulus_lcl(self), {'units': 'm'})
-        self['time'] = (['time'], day_in_year_to_datetime(self._dataset['time'], self._year))
-        self._time = self['time'].values
-
-
-@export
 def load_sam_dataset(filename_or_filenames):
     dataset = get_xarray_dataset_from_filename_or_filenames(filename_or_filenames)
     if isinstance(filename_or_filenames, string_types):
