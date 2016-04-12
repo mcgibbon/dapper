@@ -25,6 +25,8 @@ def datetime64_to_builtin_datetime(dt64):
 def cast_to_dapper_datetime(dt):
     if isinstance(dt, np.datetime64):
         dt = datetime64_to_builtin_datetime(dt)
+        return datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+                        dt.microsecond, dt.tzinfo)
     elif isinstance(dt, datetime):
         return dt
     else:
